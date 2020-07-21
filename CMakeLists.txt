@@ -50,3 +50,5 @@ write_basic_package_version_file(
 export(
   EXPORT libactorsTargets
   FILE "${CMAKE_CURRENT_BINARY_DIR}/libactorsTargets.cmake")
+
+export(PACKAGE libactors)
