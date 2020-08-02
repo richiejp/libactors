@@ -26,9 +26,16 @@ target_compile_definitions(actors
   INTERFACE libactors_VERSION_MINOR=${libactors_VERSION_MINOR})
 
 enable_testing()
-add_executable(actors-tests tests/actors.c)
-target_link_libraries(actors-tests actors)
-add_test(actors-test actors-tests)
+
+function(actors_test name)
+  add_executable(${name}-tests tests/${name}.c)
+  target_link_libraries(${name}-tests actors)
+  add_test(${name} ${name}-tests)
+endfunction(actors_test)
+
+actors_test(actors)
+actors_test(filter)
+actors_test(ring)
 
 install(TARGETS actors DESTINATION lib EXPORT libactorsTargets)
 install(FILES include/actors.h DESTINATION include)

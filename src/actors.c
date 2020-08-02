@@ -35,41 +35,96 @@ static struct addr_entry *book_lookup(addr_t addr)
 	cds_lfht_lookup(book, addr, addr_entry_match, &addr, &iter);
 	node = cds_lfht_iter_get_node(&iter);
 
-/* TODO: What if address doesn't exist? */
-	assert(node);
+	if (!node)
+		return NULL;
 
 	return caa_container_of(node, struct addr_entry, node);
+}
+
+void msg_box_init(struct msg_box *box)
+{
+	cds_wfcq_init(&box->head, &box->tail);
+}
+
+void msg_box_push(struct msg_box *box, struct msg *msg)
+{
+	cds_wfcq_node_init(&msg->node);
+	cds_wfcq_enqueue(&box->head, &box->tail, &msg->node);
+}
+
+struct msg *msg_box_pop(struct msg_box *box)
+{
+	struct cds_wfcq_node *node =
+		__cds_wfcq_dequeue_blocking(&box->head, &box->tail);
+
+	if (!node)
+		return NULL;
+
+	return caa_container_of(node, struct msg, node);
 }
 
 /* Remove a message from the actor's inbox.
  *
  * Only a single thread should calls this. This only ever blocks while a
  * message is being enqueued.
+ *
+ * If a filter is set then only messages which pass the filter will be
+ * popped. Others will be buffered until the filter is changed.
  */
 struct msg *actor_inbox_pop(struct actor *self)
 {
-	struct cds_wfcq_node *node;
+	struct msg *msg;
 
-	node = __cds_wfcq_dequeue_blocking(&self->inbox_head,
-					   &self->inbox_tail);
+	for (;;) {
+		msg = msg_box_pop(&self->inbox);
 
-	if (node)
-		return caa_container_of(node, struct msg, node);
-	else
-		return NULL;
+		if (!msg)
+			break;
+
+		if (!self->filter || self->filter(self, msg))
+			break;
+
+		msg_box_push(&self->buf, msg);
+	}
+
+	return msg;
+}
+
+void actor_inbox_filter(struct actor *self, msg_filter_fn filter)
+{
+	self->filter = filter;
+
+	__cds_wfcq_splice_blocking(&self->inbox.head,
+				   &self->inbox.tail,
+				   &self->buf.head,
+				   &self->buf.tail);
+}
+
+struct msg *_msg_alloc_extra(size_t extra)
+{
+	struct msg *msg = malloc(sizeof(struct msg) + extra);
+
+	assert_perror(errno);
+	assert(msg);
+
+	return msg;
+}
+
+/* Allocate a new message and some extra memory for its content ptr */
+struct msg *msg_alloc_extra(size_t extra)
+{
+	struct msg *msg = _msg_alloc_extra(extra);
+
+	assert(extra);
+	msg->ptr = (void *)(msg + 1);
+
+	return msg;
 }
 
 /* Allocate a new message struct */
 struct msg *msg_alloc(void)
 {
-	struct msg *msg = malloc(sizeof(*msg));
-
-	assert_perror(errno);
-	assert(msg);
-
-	memset(msg, 0, sizeof(*msg));
-
-	return msg;
+	return _msg_alloc_extra(0);
 }
 
 void actor_hear_loop(struct actor *self)
@@ -92,11 +147,21 @@ void actor_hear_loop(struct actor *self)
 static void *actor_start_routine(void *void_self)
 {
 	struct actor *self = void_self;
+	struct addr_entry *entry;
 
 	rcu_register_thread();
 
-	/* Wait for our address to be added to the book */
-	synchronize_rcu();
+	/* We don't want to send a message with an invalid from address */
+	for (;;) {
+		rcu_read_lock();
+		entry = book_lookup(self->addr);
+		rcu_read_unlock();
+
+		if (entry)
+			break;
+
+		pthread_yield();
+	}
 
 	if (self->listen)
 		self->listen(self);
@@ -106,21 +171,41 @@ static void *actor_start_routine(void *void_self)
 	actor_exit(self);
 }
 
-struct actor *actor_alloc(void)
+struct actor *_actor_alloc_extra(size_t extra)
 {
-	struct actor *actor = malloc(sizeof(*actor));
+	struct actor *actor = malloc(sizeof(*actor) + extra);
 
 	assert_perror(errno);
 	assert(actor);
 
-	memset(actor, 0, sizeof(*actor));
+	memset(actor, 0, sizeof(*actor) + extra);
+
+	msg_box_init(&actor->inbox);
+	msg_box_init(&actor->buf);
 
 	return actor;
 }
 
-/* Starts the passed actor's thread and adds it to the book
+struct actor *actor_alloc_extra(size_t extra)
+{
+	struct actor *actor = _actor_alloc_extra(extra);
+
+	assert(extra);
+	actor->priv = (void *)(actor + 1);
+
+	return actor;
+}
+
+struct actor *actor_alloc(void)
+{
+	return _actor_alloc_extra(0);
+}
+
+/* Starts the passed actor's thread and adds it to the book.
  *
- * Takes ownership of the passed actor. Returns the new thread.
+ * Takes ownership of the passed actor. Returns the new thread. Note that once
+ * an actor is started it may free itself (although it does call
+ * synchronize_rcu() before free()).
  */
 pthread_t actor_start(struct actor *self)
 {
@@ -137,27 +222,17 @@ pthread_t actor_start(struct actor *self)
 	entry->actor = self;
 	cds_lfht_node_init(&entry->node);
 
-	cds_wfcq_init(&self->inbox_head, &self->inbox_tail);
-
 	/* TODO: Thread cancellation and cleanup */
 	/* TODO: Set parent actor */
-
-	/* We want the new actor to wait at synchronize for this read section
-	 * to end. Otherwise the new actor could send itself a message before
-	 * it has been added to he address book.
-	 *
-	 * TODO: Perhaps it would be better to wait on a mutex or message?
-	 */
-	rcu_read_lock();
         ret = pthread_create(&self->thread, NULL, actor_start_routine, self);
+	assert_perror(ret);
 	thread = self->thread;
 
+	rcu_read_lock();
 	ret_node = cds_lfht_add_unique(book, entry->key, addr_entry_match,
 				       &entry->key, &entry->node);
-	rcu_read_unlock();
-
-	assert_perror(ret);
 	assert(ret_node == &entry->node);
+	rcu_read_unlock();
 
 	return thread;
 }
@@ -171,6 +246,22 @@ void actors_init(void)
 			    NULL);
 }
 
+void actors_wait(void)
+{
+	struct cds_lfht_iter iter;
+	struct cds_lfht_node *node;
+
+	do {
+		/* TODO: Futex waiters? */
+		pthread_yield();
+
+		rcu_read_lock();
+		cds_lfht_first(book, &iter);
+		node = cds_lfht_iter_get_node(&iter);
+		rcu_read_unlock();
+	} while (node);
+}
+
 void actor_say(struct actor *self, addr_t to, struct msg *msg)
 {
 	struct addr_entry *entry;
@@ -179,18 +270,15 @@ void actor_say(struct actor *self, addr_t to, struct msg *msg)
 	assert(msg->type);
 
 	msg->from = self->addr;
-	cds_wfcq_node_init(&msg->node);
 
 	/* Putting enqueue in read section ensures actor still exists */
 	rcu_read_lock();
 	entry = book_lookup(to);
-	cds_wfcq_enqueue(&entry->actor->inbox_head,
-			 &entry->actor->inbox_tail,
-			 &msg->node);
+	assert(entry);
+	msg_box_push(&entry->actor->inbox, msg);
 	rcu_read_unlock();
 }
 
-__attribute__((noreturn))
 void actor_exit(struct actor *self)
 {
 	int ret;
@@ -205,10 +293,10 @@ void actor_exit(struct actor *self)
 
 	synchronize_rcu();
 	free(entry);
-	free(self->priv);
 	free(self);
 
 	rcu_unregister_thread();
 
 	pthread_exit(self);
 }
+
