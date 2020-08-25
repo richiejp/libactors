@@ -40,6 +40,7 @@ struct actor {
 	struct msg_box inbox;
 	struct msg_box buf;
 	pthread_t thread;
+	int32_t futex;
 
 	/* TODO: Cascading actor failures */
 	/* addr_t parent; */
@@ -82,12 +83,16 @@ struct actor *actor_alloc(void)
 	__attribute__((warn_unused_result));
 struct actor *actor_alloc_extra(size_t extra)
 	__attribute__((warn_unused_result));
+void actor_wait(struct actor *self)
+	__attribute__((nonnull));
 void actor_hear_loop(struct actor *self)
 	__attribute__((nonnull, noreturn));
 pthread_t actor_start(struct actor *self)
 	__attribute__((nonnull));
 void actor_say(struct actor *self, addr_t to, struct msg *msg)
 	__attribute__((nonnull));
+unsigned int actor_exists(addr_t it)
+	__attribute__((warn_unused_result));
 
 void actor_exit(struct actor *self)
 	__attribute__((nonnull, noreturn));

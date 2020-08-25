@@ -4,6 +4,7 @@
 #include "actors.h"
 
 #include <urcu/rculfhash.h>
+#include <urcu/futex.h>
 
 /* TODO: forwarding addresses */
 /* Entry in the the address book */
@@ -127,6 +128,28 @@ struct msg *msg_alloc(void)
 	return _msg_alloc_extra(0);
 }
 
+void actor_wait(struct actor *self)
+{
+	int32_t futex;
+
+	pthread_yield();
+
+	futex = uatomic_add_return(&self->futex, -1);
+	if (futex > -1)
+		return;
+
+	assert(futex == -1);
+
+	while (futex_noasync(&self->futex, FUTEX_WAIT, -1, NULL, NULL, 0)
+	       && errno == EINTR)
+		;
+
+	if (errno != EWOULDBLOCK)
+		assert_perror(errno);
+
+	errno = 0;
+}
+
 void actor_hear_loop(struct actor *self)
 {
 	struct msg *msg;
@@ -139,29 +162,32 @@ void actor_hear_loop(struct actor *self)
 		if (msg)
 			self->hear(self, msg);
 		else
-			/* TODO: futex to sleep properly? */
-			pthread_yield();
+			actor_wait(self);
 	}
+}
+
+unsigned int actor_exists(addr_t it)
+{
+	struct addr_entry *entry;
+
+	rcu_read_lock();
+	entry = book_lookup(it);
+	rcu_read_unlock();
+
+	return !!entry;
 }
 
 static void *actor_start_routine(void *void_self)
 {
 	struct actor *self = void_self;
-	struct addr_entry *entry;
 
 	rcu_register_thread();
 
+	self->futex = 0;
+
 	/* We don't want to send a message with an invalid from address */
-	for (;;) {
-		rcu_read_lock();
-		entry = book_lookup(self->addr);
-		rcu_read_unlock();
-
-		if (entry)
-			break;
-
+	while (!actor_exists(self->addr))
 		pthread_yield();
-	}
 
 	if (self->listen)
 		self->listen(self);
@@ -265,6 +291,7 @@ void actors_wait(void)
 void actor_say(struct actor *self, addr_t to, struct msg *msg)
 {
 	struct addr_entry *entry;
+	int32_t *futex;
 
 	assert(to);
 	assert(msg->type);
@@ -276,6 +303,12 @@ void actor_say(struct actor *self, addr_t to, struct msg *msg)
 	entry = book_lookup(to);
 	assert(entry);
 	msg_box_push(&entry->actor->inbox, msg);
+
+	futex = &entry->actor->futex;
+	if (uatomic_add_return(futex, 1) < 1) {
+		if (futex_noasync(futex, FUTEX_WAKE, 1, NULL, NULL, 0) < 0)
+			assert_perror(errno);
+	}
 	rcu_read_unlock();
 }
 

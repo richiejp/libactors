@@ -36,6 +36,7 @@ endfunction(actors_test)
 actors_test(actors)
 actors_test(filter)
 actors_test(ring)
+actors_test(sleepers)
 
 install(TARGETS actors DESTINATION lib EXPORT libactorsTargets)
 install(FILES include/actors.h DESTINATION include)
