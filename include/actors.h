@@ -1,10 +1,30 @@
+#include <unistd.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <execinfo.h>
 #include <pthread.h>
 
 #include <urcu.h>
 #include <urcu/rculist.h>
 #include <urcu/wfcqueue.h>
+
+#define BT_BUF_SIZE 100
+
+#define actor_assert(expr, fmt, ...) do {				\
+	if (expr)							\
+		break;							\
+									\
+	dprintf(STDERR_FILENO, "%s:%s:%i Assert Fail '" #expr "': ",	\
+		__FILE__, __func__, __LINE__);				\
+	dprintf(STDERR_FILENO, fmt ":\n", ##__VA_ARGS__);		\
+									\
+	void *buf[BT_BUF_SIZE];						\
+	int i, nptrs = backtrace(buf, BT_BUF_SIZE);			\
+	for (i = 0; i < nptrs; i++)					\
+		dprintf(STDERR_FILENO, "\t%p\n", buf[i]);		\
+	exit(1);							\
+} while (0);
 
 typedef uint64_t addr_t;
 

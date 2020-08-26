@@ -138,7 +138,7 @@ void actor_wait(struct actor *self)
 	if (futex > -1)
 		return;
 
-	assert(futex == -1);
+	actor_assert(futex == -1, "futex = %d", futex);
 
 	while (futex_noasync(&self->futex, FUTEX_WAIT, -1, NULL, NULL, 0)
 	       && errno == EINTR)
@@ -332,4 +332,3 @@ void actor_exit(struct actor *self)
 
 	pthread_exit(self);
 }
-

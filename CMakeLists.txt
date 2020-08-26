@@ -37,6 +37,9 @@ actors_test(actors)
 actors_test(filter)
 actors_test(ring)
 actors_test(sleepers)
+actors_test(assert)
+
+set_tests_properties(assert PROPERTIES WILL_FAIL 1)
 
 install(TARGETS actors DESTINATION lib EXPORT libactorsTargets)
 install(FILES include/actors.h DESTINATION include)
