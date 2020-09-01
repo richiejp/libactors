@@ -14,13 +14,14 @@
 
 #define BT_BUF_SIZE 100
 
-#define actor_assert(expr, fmt, ...) do {				\
+#define actor_assert(expr, ...) do {					\
 	if (expr)							\
 		break;							\
 									\
 	dprintf(STDERR_FILENO, "%s:%s:%i Assert Fail '" #expr "': ",	\
 		__FILE__, __func__, __LINE__);				\
-	dprintf(STDERR_FILENO, fmt ":\n", ##__VA_ARGS__);		\
+	dprintf(STDERR_FILENO, ##__VA_ARGS__);				\
+	dprintf(STDERR_FILENO, ":\n");					\
 									\
 	void *buf[BT_BUF_SIZE];						\
 	int i, nptrs = backtrace(buf, BT_BUF_SIZE);			\
