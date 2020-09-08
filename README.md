@@ -12,7 +12,7 @@ $ mkdir build && cd build
 $ cmake -DCMAKE_EXPORT_PACKAGE_REGISTRY=ON ..
 $ make
 $ make test
-$ cmake --install ./ --prefix ~/.local
+$ cmake --install ./ --prefix ~/.cmake
 ```
 
 You can then use it in another CMake project (e.g. ltp-executor) by
