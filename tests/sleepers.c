@@ -23,6 +23,9 @@ static void waker_listen(struct actor *self)
 {
 	struct msg *msg;
 	int i;
+	struct timespec timeout = { 0, 100000 };
+
+	actor_wait(self, &timeout);
 
 	for (i = 0; i < SLEEPERS; i++) {
 		msg = msg_alloc();

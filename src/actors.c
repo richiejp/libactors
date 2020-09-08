@@ -131,9 +131,10 @@ struct msg *msg_alloc(void)
 	return _msg_alloc_extra(0);
 }
 
-void actor_wait(struct actor *self)
+void actor_wait(struct actor *self, const struct timespec *timeout)
 {
 	int32_t futex;
+	int r0;
 
 	pthread_yield();
 
@@ -143,12 +144,31 @@ void actor_wait(struct actor *self)
 
 	actor_assert(futex == -1, "futex = %d", futex);
 
-	while (futex_noasync(&self->futex, FUTEX_WAIT, -1, NULL, NULL, 0)
-	       && errno == EINTR)
-		;
+	do {
+		r0 = futex_noasync(&self->futex, FUTEX_WAIT, -1, timeout, NULL, 0);
 
-	if (errno != EWOULDBLOCK)
+		if (r0) {
+			if (errno != EINTR)
+				break;
+
+			errno = 0;
+		}
+
+		/* Could be spurious wakeup or a real wakeup racing with an interrupt */
+	} while (uatomic_read(&self->futex) == -1);
+
+	switch (errno) {
+	case EWOULDBLOCK:
+		break;
+	case ETIMEDOUT:
+		actor_assert(timeout, "Futex timed out when timeout is NULL");
+		uatomic_inc(&self->futex);
+		break;
+	default:
 		assert_perror(errno);
+	}
+
+	actor_assert(uatomic_read(&self->futex) > -1, "futex = %d", futex);
 
 	errno = 0;
 }
@@ -165,7 +185,7 @@ void actor_hear_loop(struct actor *self)
 		if (msg)
 			self->hear(self, msg);
 		else
-			actor_wait(self);
+			actor_wait(self, NULL);
 	}
 }
 

@@ -107,8 +107,8 @@ struct actor *actor_alloc(void)
 	__attribute__((warn_unused_result));
 struct actor *actor_alloc_extra(size_t extra)
 	__attribute__((warn_unused_result));
-void actor_wait(struct actor *self)
-	__attribute__((nonnull));
+void actor_wait(struct actor *self, const struct timespec *timeout)
+	__attribute__((nonnull (1)));
 void actor_hear_loop(struct actor *self)
 	__attribute__((nonnull, noreturn));
 pthread_t actor_start(struct actor *self)
